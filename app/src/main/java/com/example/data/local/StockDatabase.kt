@@ -4,10 +4,11 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.model.ScanRecord
 import com.example.data.model.StockItem
 import com.example.data.model.TransactionRecord
 
-@Database(entities = [StockItem::class, TransactionRecord::class], version = 2, exportSchema = false)
+@Database(entities = [StockItem::class, TransactionRecord::class, ScanRecord::class], version = 3, exportSchema = false)
 abstract class StockDatabase : RoomDatabase() {
     abstract fun stockDao(): StockDao
 

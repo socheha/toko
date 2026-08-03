@@ -32,6 +32,7 @@ class StockRepository(private val stockDao: StockDao) {
 
     val allStockItems: Flow<List<StockItem>> = stockDao.getAllItems()
     val allTransactions: Flow<List<TransactionRecord>> = stockDao.getAllTransactions()
+    val allScanRecords: Flow<List<com.example.data.model.ScanRecord>> = stockDao.getAllScanRecords()
 
     fun getTop50ItemsBySheet(sheetName: String): Flow<List<StockItem>> =
         stockDao.getTop50ItemsBySheet(sheetName)
@@ -169,13 +170,122 @@ class StockRepository(private val stockDao: StockDao) {
         Pair(newItems, summary)
     }
 
-    suspend fun generateAndImportSample(context: Context): WorkbookAnalysisResult = withContext(Dispatchers.IO) {
+    suspend fun generateAndImportSample(context: Context): Pair<WorkbookAnalysisResult, Uri> = withContext(Dispatchers.IO) {
         val (sampleUri, fileName) = SampleExcelGenerator.createSampleStockExcel(context)
-        processExcelImport(context, sampleUri, fileName, "~15 KB")
+        val result = processExcelImport(context, sampleUri, fileName, "~15 KB")
+        Pair(result, sampleUri)
+    }
+
+    suspend fun exportExcelData(
+        context: Context,
+        originalUri: Uri,
+        originalFileName: String
+    ): com.example.data.model.ExportResult = withContext(Dispatchers.IO) {
+        val allItems = stockDao.getAllItemsList()
+        com.example.data.excel.ExcelExporter.exportUpdatedExcel(
+            context = context,
+            originalUri = originalUri,
+            originalFileName = originalFileName,
+            updatedStockItems = allItems
+        )
     }
 
     suspend fun clearCurrentData() = withContext(Dispatchers.IO) {
         stockDao.clearAll()
+    }
+
+    // --- TAHAP 6: SCAN NOTA AI ---
+
+    suspend fun processReceiptScan(
+        context: Context,
+        bitmap: android.graphics.Bitmap
+    ): Pair<List<com.example.data.model.ScanMatchResultItem>, com.example.data.model.ScanRecord> = withContext(Dispatchers.IO) {
+        // 1. Panggil Gemini Vision API untuk membaca isi nota
+        val scannedOcrItems = com.example.data.api.GeminiVisionService.analyzeReceiptImage(bitmap)
+
+        if (scannedOcrItems.isEmpty()) {
+            throw IllegalStateException("AI tidak dapat menemukan nama/jumlah barang dari foto nota. Pastikan foto nota terlihat jelas.")
+        }
+
+        // 2. Ambil seluruh data barang dari database Excel
+        val allDbItems = stockDao.getAllItemsList()
+
+        // 3. Lakukan Pencocokan Barang (Fuzzy Matching)
+        val matchResults = scannedOcrItems.map { scannedItem ->
+            val candidates = com.example.ui.util.FuzzySearchEngine.search(
+                items = allDbItems,
+                query = scannedItem.namaBarang,
+                maxResults = 5
+            )
+            val topCandidate = candidates.firstOrNull()
+
+            com.example.data.model.ScanMatchResultItem(
+                rawOcrName = scannedItem.namaBarang,
+                quantity = scannedItem.jumlah,
+                selectedStockItem = topCandidate,
+                candidateStockItems = candidates,
+                isUserConfirmed = true
+            )
+        }
+
+        // 4. Simpan foto nota ke folder cache lokal
+        val scanDir = java.io.File(context.cacheDir, "ScanReceipts")
+        if (!scanDir.exists()) scanDir.mkdirs()
+        val imageFile = java.io.File(scanDir, "scan_${System.currentTimeMillis()}.jpg")
+        java.io.FileOutputStream(imageFile).use { fos ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, fos)
+        }
+
+        // 5. Buat dan simpan ScanRecord ke Room database
+        val now = System.currentTimeMillis()
+        val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID"))
+        val dateStr = dateFormat.format(Date(now))
+
+        // Serialize OCR and Match result
+        val rawOcrJson = com.example.data.local.DraftPersistenceManager.serializeDraftItems(
+            scannedOcrItems.map {
+                DraftItem(
+                    stockItemId = 0,
+                    kodeBarang = "-",
+                    namaBarang = it.namaBarang,
+                    quantity = it.jumlah
+                )
+            }
+        )
+
+        val matchedJson = com.example.data.local.DraftPersistenceManager.serializeDraftItems(
+            matchResults.mapNotNull { result ->
+                result.selectedStockItem?.let { stock ->
+                    DraftItem(
+                        stockItemId = stock.id,
+                        kodeBarang = stock.kodeBarang,
+                        namaBarang = stock.namaBarang,
+                        quantity = result.quantity,
+                        stokTersedia = stock.stok,
+                        harga = stock.harga,
+                        satuan = stock.satuan,
+                        lokasiSheet = stock.lokasiSheet
+                    )
+                }
+            }
+        )
+
+        val scanRecord = com.example.data.model.ScanRecord(
+            imagePath = imageFile.absolutePath,
+            rawOcrJson = rawOcrJson,
+            matchedItemsJson = matchedJson,
+            timestamp = now,
+            dateFormatted = dateStr,
+            itemCount = matchResults.size
+        )
+
+        val insertedId = stockDao.insertScanRecord(scanRecord)
+
+        Pair(matchResults, scanRecord.copy(id = insertedId))
+    }
+
+    suspend fun deleteScanRecord(id: Long) = withContext(Dispatchers.IO) {
+        stockDao.deleteScanRecord(id)
     }
 }
 

@@ -13,6 +13,9 @@ interface StockDao {
     @Query("SELECT * FROM stock_items ORDER BY id ASC")
     fun getAllItems(): Flow<List<StockItem>>
 
+    @Query("SELECT * FROM stock_items ORDER BY id ASC")
+    suspend fun getAllItemsList(): List<StockItem>
+
     @Query("SELECT * FROM stock_items WHERE lokasiSheet = :sheetName ORDER BY nomorBaris ASC LIMIT 50")
     fun getTop50ItemsBySheet(sheetName: String): Flow<List<StockItem>>
 
@@ -64,5 +67,18 @@ interface StockDao {
 
     @Query("DELETE FROM transaction_records WHERE id = :id")
     suspend fun deleteTransaction(id: Long)
+
+    // --- SCAN NOTA HISTORY DAOS (TAHAP 6) ---
+    @Query("SELECT * FROM scan_records ORDER BY timestamp DESC")
+    fun getAllScanRecords(): Flow<List<com.example.data.model.ScanRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertScanRecord(scanRecord: com.example.data.model.ScanRecord): Long
+
+    @Query("DELETE FROM scan_records WHERE id = :id")
+    suspend fun deleteScanRecord(id: Long)
+
+    @Query("DELETE FROM scan_records")
+    suspend fun clearScanRecords()
 }
 

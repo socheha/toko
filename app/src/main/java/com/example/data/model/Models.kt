@@ -109,3 +109,50 @@ data class TransactionRecord(
     val itemsJson: String         // Serialized JSON of List<DraftItem>
 )
 
+/**
+ * Hasil ekspor file Excel baru (Tahap 5).
+ */
+data class ExportResult(
+    val filePath: String,
+    val fileName: String,
+    val fileUri: android.net.Uri,
+    val exportTimestampFormatted: String,
+    val changedItemCount: Int,
+    val totalStockReduced: Double,
+    val totalItemsExported: Int
+)
+
+/**
+ * Model riwayat scan nota AI (Tahap 6).
+ */
+@Entity(tableName = "scan_records")
+data class ScanRecord(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val imagePath: String,              // Path ke file foto nota di penyimpanan lokal
+    val rawOcrJson: String,             // JSON mentah hasil pembacaan OCR Gemini
+    val matchedItemsJson: String,        // JSON terstruktur dari hasil pencocokan item
+    val timestamp: Long = System.currentTimeMillis(),
+    val dateFormatted: String,          // Format tanggal "03 Aug 2026, 15:30"
+    val itemCount: Int                  // Jumlah barang yang berhasil terdeteksi
+)
+
+/**
+ * Item hasil OCR Gemini Vision.
+ */
+data class ScannedOcrItem(
+    val namaBarang: String,
+    val jumlah: Int = 1
+)
+
+/**
+ * Hasil pencocokan item nota hasil OCR dengan data barang Excel.
+ */
+data class ScanMatchResultItem(
+    val rawOcrName: String,
+    val quantity: Int,
+    val selectedStockItem: StockItem?,
+    val candidateStockItems: List<StockItem> = emptyList(),
+    val isUserConfirmed: Boolean = true
+)
+

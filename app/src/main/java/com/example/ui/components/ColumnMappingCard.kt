@@ -65,6 +65,10 @@ fun ColumnMappingCard(
     val currentMapping = sheetSummary.currentMapping
     val columns = sheetSummary.availableColumns
 
+    // Local state for pending mapping before user clicks "Simpan Pemetaan"
+    var tempMapping by remember(currentMapping) { mutableStateOf(currentMapping) }
+    val isModified = tempMapping != currentMapping
+
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -181,9 +185,9 @@ fun ColumnMappingCard(
                         label = "1. Kolom Kode Barang",
                         icon = Icons.Default.QrCode,
                         columns = columns,
-                        selectedIndex = currentMapping.kodeColIndex,
+                        selectedIndex = tempMapping.kodeColIndex,
                         onColumnSelected = { idx ->
-                            onMappingChanged(currentMapping.copy(kodeColIndex = idx))
+                            tempMapping = tempMapping.copy(kodeColIndex = idx)
                         },
                         testTag = "dropdown_select_kode_col"
                     )
@@ -193,9 +197,9 @@ fun ColumnMappingCard(
                         label = "2. Kolom Nama Barang",
                         icon = Icons.Default.Inventory,
                         columns = columns,
-                        selectedIndex = currentMapping.namaColIndex,
+                        selectedIndex = tempMapping.namaColIndex,
                         onColumnSelected = { idx ->
-                            onMappingChanged(currentMapping.copy(namaColIndex = idx))
+                            tempMapping = tempMapping.copy(namaColIndex = idx)
                         },
                         testTag = "dropdown_select_nama_col"
                     )
@@ -205,20 +209,44 @@ fun ColumnMappingCard(
                         label = "3. Kolom Jumlah Stok (Qty)",
                         icon = Icons.Default.Pin,
                         columns = columns,
-                        selectedIndex = currentMapping.stokColIndex,
+                        selectedIndex = tempMapping.stokColIndex,
                         onColumnSelected = { idx ->
-                            onMappingChanged(currentMapping.copy(stokColIndex = idx))
+                            tempMapping = tempMapping.copy(stokColIndex = idx)
                         },
                         testTag = "dropdown_select_stok_col"
                     )
 
                     // 4. Baris Awal Data Selector
                     StartRowPicker(
-                        startRowIndex = currentMapping.startDataRowIndex,
+                        startRowIndex = tempMapping.startDataRowIndex,
                         onRowSelected = { r ->
-                            onMappingChanged(currentMapping.copy(startDataRowIndex = r))
+                            tempMapping = tempMapping.copy(startDataRowIndex = r)
                         }
                     )
+
+                    // Button Simpan Pemetaan Kolom
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            onMappingChanged(tempMapping)
+                        },
+                        enabled = isModified,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                            .testTag("button_simpan_pemetaan"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isModified) "Simpan Pemetaan Kolom" else "Pemetaan Sudah Sesuai",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

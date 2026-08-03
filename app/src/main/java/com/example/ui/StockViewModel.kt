@@ -24,9 +24,22 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+import com.example.data.model.ExportResult
+
+import com.example.data.model.ScanMatchResultItem
+import com.example.data.model.ScanRecord
+
 data class StockUiState(
     val isLoading: Boolean = false,
     val isSavingTransaction: Boolean = false,
+    val isExporting: Boolean = false,
+    val isScanningReceipt: Boolean = false,
+    val isDarkMode: Boolean = false,
+    val highlightedSearchIndex: Int = 0,
+    val omzetHariIni: Double = 0.0,
+    val transaksiHariIniCount: Int = 0,
+    val favoriteItems: List<Pair<StockItem, Int>> = emptyList(),
+    val lowStockItems: List<StockItem> = emptyList(),
     val analysisResult: WorkbookAnalysisResult? = null,
     val searchQuery: String = "",
     val selectedSheetName: String = "",
@@ -38,6 +51,11 @@ data class StockUiState(
     val totalUangHariIniInput: String = "",
     val transactions: List<TransactionRecord> = emptyList(),
     val insufficientStockProblemItems: List<DraftItem>? = null,
+    val exportResult: ExportResult? = null,
+    val scanMatchResults: List<ScanMatchResultItem>? = null,
+    val activeScanRecord: ScanRecord? = null,
+    val scanHistoryRecords: List<ScanRecord> = emptyList(),
+    val showScanHistoryDialog: Boolean = false,
     val snackbarMessage: String? = null
 )
 
@@ -53,18 +71,101 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
                 _uiState.update { it.copy(transactions = txList) }
             }
         }
+
+        // Collect scan history records reactively
+        viewModelScope.launch {
+            repository.allScanRecords.collect { records ->
+                _uiState.update { it.copy(scanHistoryRecords = records) }
+            }
+        }
+
+        // Reactive computation for Dashboard Metrics (Omzet, Transaksi Hari Ini, Barang Favorit, Low Stock)
+        viewModelScope.launch {
+            combine(repository.allStockItems, repository.allTransactions) { items, txList ->
+                val todayStr = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+                val todayTx = txList.filter { it.tanggalFormatted.equals(todayStr, ignoreCase = true) }
+                val omzet = todayTx.sumOf { it.totalOmzet }
+                val txCount = todayTx.size
+
+                val lowStock = items.filter { it.stok <= 5.0 }.take(10)
+
+                // Sales frequency map
+                val salesMap = mutableMapOf<String, Int>()
+                txList.forEach { tx ->
+                    val draftList = DraftPersistenceManager.deserializeDraftItems(tx.itemsJson)
+                    draftList.forEach { d ->
+                        val current = salesMap.getOrDefault(d.namaBarang, 0)
+                        salesMap[d.namaBarang] = current + d.quantity
+                    }
+                }
+
+                val favPairs = salesMap.entries
+                    .sortedByDescending { it.value }
+                    .take(6)
+                    .mapNotNull { entry ->
+                        val matchedItem = items.find { it.namaBarang.equals(entry.key, ignoreCase = true) }
+                        if (matchedItem != null) matchedItem to entry.value else null
+                    }
+
+                _uiState.update {
+                    it.copy(
+                        omzetHariIni = omzet,
+                        transaksiHariIniCount = txCount,
+                        lowStockItems = lowStock,
+                        favoriteItems = favPairs
+                    )
+                }
+            }.collect {}
+        }
     }
 
     /**
-     * Memuat auto-saved draft dari SharedPreferences jika browser/aplikasi dibuka kembali.
+     * Memuat auto-saved draft & tema dari SharedPreferences jika browser/aplikasi dibuka kembali.
      */
     fun loadAutoSavedDraft(context: Context) {
+        val prefs = context.getSharedPreferences("app_settings_prefs", Context.MODE_PRIVATE)
+        val dark = prefs.getBoolean("key_is_dark_mode", false)
+        _uiState.update { it.copy(isDarkMode = dark) }
+
         if (_uiState.value.draftItems.isEmpty()) {
             val savedDraft = DraftPersistenceManager.loadDraft(context)
             if (savedDraft.isNotEmpty()) {
                 _uiState.update { it.copy(draftItems = savedDraft) }
             }
         }
+    }
+
+    fun toggleDarkMode(context: Context) {
+        val newDark = !_uiState.value.isDarkMode
+        _uiState.update { it.copy(isDarkMode = newDark) }
+        val prefs = context.getSharedPreferences("app_settings_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("key_is_dark_mode", newDark).apply()
+    }
+
+    fun moveHighlightUp() {
+        _uiState.update {
+            val newIdx = (it.highlightedSearchIndex - 1).coerceAtLeast(0)
+            it.copy(highlightedSearchIndex = newIdx)
+        }
+    }
+
+    fun moveHighlightDown(maxSize: Int) {
+        if (maxSize <= 0) return
+        _uiState.update {
+            val newIdx = (it.highlightedSearchIndex + 1).coerceAtMost(maxSize - 1)
+            it.copy(highlightedSearchIndex = newIdx)
+        }
+    }
+
+    fun addHighlightedToDraft(context: Context, displayedItems: List<StockItem>) {
+        val idx = _uiState.value.highlightedSearchIndex
+        if (idx in displayedItems.indices) {
+            addToDraft(context, displayedItems[idx])
+        }
+    }
+
+    fun clearSearchOrDismiss() {
+        _uiState.update { it.copy(searchQuery = "", highlightedSearchIndex = 0) }
     }
 
     private fun persistDraft(context: Context, items: List<DraftItem>) {
@@ -122,13 +223,13 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     fun loadSampleData(context: Context) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = repository.generateAndImportSample(context)
+            val (result, sampleUri) = repository.generateAndImportSample(context)
             _uiState.update {
                 it.copy(
                     isLoading = false,
                     analysisResult = result,
                     selectedSheetName = result.activeSheetName,
-                    currentUri = null,
+                    currentUri = sampleUri,
                     errorMessage = result.errorMessage
                 )
             }
@@ -244,6 +345,60 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
 
     // --- DRAFT PENJUALAN MANAGEMENT ---
 
+    private fun isSameItem(draft: DraftItem, item: StockItem): Boolean {
+        if (item.id > 0L && draft.stockItemId > 0L) {
+            return item.id == draft.stockItemId
+        }
+
+        val validKodeItem = item.kodeBarang.isNotBlank() && item.kodeBarang != "-" && !item.kodeBarang.equals("N/A", ignoreCase = true)
+        val validKodeDraft = draft.kodeBarang.isNotBlank() && draft.kodeBarang != "-" && !draft.kodeBarang.equals("N/A", ignoreCase = true)
+
+        if (validKodeItem && validKodeDraft) {
+            if (item.kodeBarang.equals(draft.kodeBarang, ignoreCase = true)) {
+                return true
+            }
+        }
+
+        if (item.namaBarang.isNotBlank() && draft.namaBarang.isNotBlank()) {
+            val sameName = item.namaBarang.trim().equals(draft.namaBarang.trim(), ignoreCase = true)
+            if (sameName) {
+                if (item.lokasiSheet.isBlank() || draft.lokasiSheet.isBlank() ||
+                    item.lokasiSheet.equals(draft.lokasiSheet, ignoreCase = true)
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun isSameDraftItem(a: DraftItem, b: DraftItem): Boolean {
+        if (a.stockItemId > 0L && b.stockItemId > 0L) {
+            return a.stockItemId == b.stockItemId
+        }
+
+        val validKodeA = a.kodeBarang.isNotBlank() && a.kodeBarang != "-" && !a.kodeBarang.equals("N/A", ignoreCase = true)
+        val validKodeB = b.kodeBarang.isNotBlank() && b.kodeBarang != "-" && !b.kodeBarang.equals("N/A", ignoreCase = true)
+
+        if (validKodeA && validKodeB) {
+            if (a.kodeBarang.equals(b.kodeBarang, ignoreCase = true)) {
+                return true
+            }
+        }
+
+        if (a.namaBarang.isNotBlank() && b.namaBarang.isNotBlank()) {
+            val sameName = a.namaBarang.trim().equals(b.namaBarang.trim(), ignoreCase = true)
+            if (sameName) {
+                if (a.lokasiSheet.isBlank() || b.lokasiSheet.isBlank() ||
+                    a.lokasiSheet.equals(b.lokasiSheet, ignoreCase = true)
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private fun pushDraftHistory(currentList: List<DraftItem>) {
         val history = _uiState.value.draftHistory.toMutableList()
         history.add(currentList)
@@ -259,14 +414,14 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         val currentDraft = _uiState.value.draftItems.toMutableList()
         pushDraftHistory(currentDraft.toList())
 
-        val existingIndex = currentDraft.indexOfFirst {
-            it.stockItemId == item.id ||
-                    (it.kodeBarang.isNotBlank() && it.kodeBarang.equals(item.kodeBarang, ignoreCase = true))
-        }
+        val existingIndex = currentDraft.indexOfFirst { isSameItem(it, item) }
 
         if (existingIndex >= 0) {
             val existing = currentDraft[existingIndex]
-            currentDraft[existingIndex] = existing.copy(quantity = existing.quantity + 1)
+            currentDraft[existingIndex] = existing.copy(
+                quantity = existing.quantity + 1,
+                stokTersedia = item.stok
+            )
         } else {
             currentDraft.add(
                 DraftItem(
@@ -299,7 +454,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         val currentDraft = _uiState.value.draftItems.toMutableList()
         pushDraftHistory(currentDraft.toList())
 
-        val index = currentDraft.indexOfFirst { it.stockItemId == draftItem.stockItemId && it.kodeBarang == draftItem.kodeBarang }
+        val index = currentDraft.indexOfFirst { isSameDraftItem(it, draftItem) }
         if (index >= 0) {
             val item = currentDraft[index]
             currentDraft[index] = item.copy(quantity = item.quantity + 1)
@@ -315,7 +470,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         val currentDraft = _uiState.value.draftItems.toMutableList()
         pushDraftHistory(currentDraft.toList())
 
-        val index = currentDraft.indexOfFirst { it.stockItemId == draftItem.stockItemId && it.kodeBarang == draftItem.kodeBarang }
+        val index = currentDraft.indexOfFirst { isSameDraftItem(it, draftItem) }
         if (index >= 0) {
             val item = currentDraft[index]
             if (item.quantity > 1) {
@@ -335,7 +490,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         val currentDraft = _uiState.value.draftItems.toMutableList()
         pushDraftHistory(currentDraft.toList())
 
-        val removed = currentDraft.removeAll { it.stockItemId == draftItem.stockItemId && it.kodeBarang == draftItem.kodeBarang }
+        val removed = currentDraft.removeAll { isSameDraftItem(it, draftItem) }
         if (removed) {
             persistDraft(context, currentDraft)
             _uiState.update {
@@ -453,6 +608,174 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
                     }
                 }
             }
+        }
+    }
+
+    // --- TAHAP 5: EXPORT EXCEL ---
+
+    fun exportExcel(context: Context) {
+        val currentUri = _uiState.value.currentUri
+        val analysis = _uiState.value.analysisResult
+
+        if (currentUri == null || analysis == null) {
+            _uiState.update { it.copy(snackbarMessage = "Tidak ada file Excel yang dimuat. Silakan impor atau muat file Excel terlebih dahulu.") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isExporting = true, errorMessage = null) }
+            try {
+                val result = repository.exportExcelData(context, currentUri, analysis.fileName)
+                _uiState.update {
+                    it.copy(
+                        isExporting = false,
+                        exportResult = result,
+                        snackbarMessage = "File Excel '${result.fileName}' berhasil diekspor!"
+                    )
+                }
+            } catch (e: Throwable) {
+                e.printStackTrace()
+                _uiState.update {
+                    it.copy(
+                        isExporting = false,
+                        errorMessage = "Gagal mengekspor file Excel: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissExportResult() {
+        _uiState.update { it.copy(exportResult = null) }
+    }
+
+    // --- TAHAP 6: SCAN NOTA AI HANDLERS ---
+
+    fun scanReceiptImage(context: Context, bitmap: android.graphics.Bitmap) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isScanningReceipt = true, errorMessage = null) }
+            try {
+                val (matchResults, scanRecord) = repository.processReceiptScan(context, bitmap)
+                _uiState.update {
+                    it.copy(
+                        isScanningReceipt = false,
+                        scanMatchResults = matchResults,
+                        activeScanRecord = scanRecord,
+                        snackbarMessage = "Nota berhasil dibaca! Silakan periksa hasil kecocokan sebelum masuk ke Draft."
+                    )
+                }
+            } catch (e: Throwable) {
+                e.printStackTrace()
+                _uiState.update {
+                    it.copy(
+                        isScanningReceipt = false,
+                        errorMessage = "Gagal memproses nota: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateScanMatchSelection(index: Int, selectedStockItem: StockItem) {
+        val currentResults = _uiState.value.scanMatchResults ?: return
+        if (index in currentResults.indices) {
+            val updatedList = currentResults.toMutableList()
+            updatedList[index] = updatedList[index].copy(
+                selectedStockItem = selectedStockItem,
+                isUserConfirmed = true
+            )
+            _uiState.update { it.copy(scanMatchResults = updatedList) }
+        }
+    }
+
+    fun updateScanItemQuantity(index: Int, newQty: Int) {
+        val currentResults = _uiState.value.scanMatchResults ?: return
+        if (index in currentResults.indices && newQty > 0) {
+            val updatedList = currentResults.toMutableList()
+            updatedList[index] = updatedList[index].copy(quantity = newQty)
+            _uiState.update { it.copy(scanMatchResults = updatedList) }
+        }
+    }
+
+    fun removeScanResultItem(index: Int) {
+        val currentResults = _uiState.value.scanMatchResults ?: return
+        if (index in currentResults.indices) {
+            val updatedList = currentResults.toMutableList()
+            updatedList.removeAt(index)
+            _uiState.update { it.copy(scanMatchResults = updatedList) }
+        }
+    }
+
+    fun applyScanResultsToDraft(context: Context) {
+        val scanResults = _uiState.value.scanMatchResults ?: return
+        if (scanResults.isEmpty()) {
+            _uiState.update { it.copy(scanMatchResults = null) }
+            return
+        }
+
+        var addedCount = 0
+        val currentDraft = _uiState.value.draftItems.toMutableList()
+
+        for (result in scanResults) {
+            val stock = result.selectedStockItem ?: continue
+            val existingIndex = currentDraft.indexOfFirst { isSameItem(it, stock) }
+
+            if (existingIndex != -1) {
+                val existing = currentDraft[existingIndex]
+                currentDraft[existingIndex] = existing.copy(quantity = existing.quantity + result.quantity)
+            } else {
+                currentDraft.add(
+                    DraftItem(
+                        stockItemId = stock.id,
+                        kodeBarang = stock.kodeBarang,
+                        namaBarang = stock.namaBarang,
+                        quantity = result.quantity,
+                        stokTersedia = stock.stok,
+                        harga = stock.harga,
+                        satuan = stock.satuan,
+                        lokasiSheet = stock.lokasiSheet
+                    )
+                )
+            }
+            addedCount++
+        }
+
+        if (addedCount > 0) {
+            pushDraftHistory(_uiState.value.draftItems)
+            persistDraft(context, currentDraft)
+            _uiState.update {
+                it.copy(
+                    draftItems = currentDraft,
+                    scanMatchResults = null,
+                    activeScanRecord = null,
+                    snackbarMessage = "$addedCount jenis barang dari foto nota berhasil ditambahkan ke Draft Penjualan!"
+                )
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    snackbarMessage = "Tidak ada barang terhubung yang dipilih untuk dimasukkan ke Draft."
+                )
+            }
+        }
+    }
+
+    fun dismissScanResults() {
+        _uiState.update { it.copy(scanMatchResults = null, activeScanRecord = null) }
+    }
+
+    fun openScanHistory() {
+        _uiState.update { it.copy(showScanHistoryDialog = true) }
+    }
+
+    fun closeScanHistory() {
+        _uiState.update { it.copy(showScanHistoryDialog = false) }
+    }
+
+    fun deleteScanHistoryRecord(id: Long) {
+        viewModelScope.launch {
+            repository.deleteScanRecord(id)
+            _uiState.update { it.copy(snackbarMessage = "Riwayat scan nota berhasil dihapus.") }
         }
     }
 
