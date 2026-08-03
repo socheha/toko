@@ -1,0 +1,6 @@
+{
+  "name": "Import Excel Stok",
+  "description": "Aplikasi pembaca dan pengimpor data stok barang dari file Excel (.xlsx / .xls) dengan pencarian otomatis sheet, deteksi kolom, dan statistik stok.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
