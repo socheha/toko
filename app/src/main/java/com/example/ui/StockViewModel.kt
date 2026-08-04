@@ -407,10 +407,11 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     }
 
     /**
-     * Tambahkan barang ke draft.
-     * Jika barang yang sama sudah ada di draft, jumlahnya bertambah (+1).
+     * Tambahkan barang ke draft dengan jumlah tertentu.
+     * Jika barang yang sama sudah ada di draft, jumlahnya bertambah.
      */
-    fun addToDraft(context: Context, item: StockItem) {
+    fun addToDraft(context: Context, item: StockItem, qtyToAdd: Int = 1) {
+        if (qtyToAdd <= 0) return
         val currentDraft = _uiState.value.draftItems.toMutableList()
         pushDraftHistory(currentDraft.toList())
 
@@ -419,7 +420,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         if (existingIndex >= 0) {
             val existing = currentDraft[existingIndex]
             currentDraft[existingIndex] = existing.copy(
-                quantity = existing.quantity + 1,
+                quantity = existing.quantity + qtyToAdd,
                 stokTersedia = item.stok
             )
         } else {
@@ -428,7 +429,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
                     stockItemId = item.id,
                     kodeBarang = item.kodeBarang,
                     namaBarang = item.namaBarang,
-                    quantity = 1,
+                    quantity = qtyToAdd,
                     stokTersedia = item.stok,
                     harga = item.harga,
                     satuan = item.satuan,
@@ -442,7 +443,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         _uiState.update {
             it.copy(
                 draftItems = currentDraft,
-                snackbarMessage = "+1 ${item.namaBarang} masuk ke Draft Penjualan"
+                snackbarMessage = "+$qtyToAdd ${item.namaBarang} masuk ke Draft Penjualan"
             )
         }
     }
@@ -475,6 +476,25 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
             val item = currentDraft[index]
             if (item.quantity > 1) {
                 currentDraft[index] = item.copy(quantity = item.quantity - 1)
+            } else {
+                currentDraft.removeAt(index)
+            }
+            persistDraft(context, currentDraft)
+            _uiState.update { it.copy(draftItems = currentDraft) }
+        }
+    }
+
+    /**
+     * Ubah jumlah barang di draft secara manual.
+     */
+    fun updateDraftQuantity(context: Context, draftItem: DraftItem, newQuantity: Int) {
+        val currentDraft = _uiState.value.draftItems.toMutableList()
+        pushDraftHistory(currentDraft.toList())
+
+        val index = currentDraft.indexOfFirst { isSameDraftItem(it, draftItem) }
+        if (index >= 0) {
+            if (newQuantity > 0) {
+                currentDraft[index] = currentDraft[index].copy(quantity = newQuantity)
             } else {
                 currentDraft.removeAt(index)
             }

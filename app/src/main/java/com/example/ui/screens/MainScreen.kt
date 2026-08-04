@@ -56,18 +56,36 @@ import com.example.R
 import com.example.data.model.StockItem
 import com.example.ui.StockUiState
 import com.example.ui.StockViewModel
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddShoppingCart
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
+import java.text.NumberFormat
+import java.util.Locale
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
@@ -101,6 +119,19 @@ fun MainScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var selectedItemForDraftDialog by remember { mutableStateOf<StockItem?>(null) }
+
+    // Dialog Input Jumlah Terjual saat klik nama barang
+    selectedItemForDraftDialog?.let { item ->
+        QuantityInputDialog(
+            item = item,
+            onDismiss = { selectedItemForDraftDialog = null },
+            onConfirm = { qty ->
+                viewModel.addToDraft(context, item, qty)
+                selectedItemForDraftDialog = null
+            }
+        )
+    }
 
     // Auto-load saved draft on screen enter
     LaunchedEffect(Unit) {
@@ -362,7 +393,7 @@ fun MainScreen(
                                     onSearchQueryChange = { query -> viewModel.updateSearchQuery(query) },
                                     isShowingTop50Only = uiState.showOnlyTop50,
                                     onToggleTop50 = { toggle -> viewModel.toggleTop50(toggle) },
-                                    onItemClick = { item -> viewModel.addToDraft(context, item) }
+                                    onItemClick = { item -> selectedItemForDraftDialog = item }
                                 )
                             }
                         }
@@ -379,6 +410,7 @@ fun MainScreen(
                                 onIncrement = { item -> viewModel.incrementDraftQuantity(context, item) },
                                 onDecrement = { item -> viewModel.decrementDraftQuantity(context, item) },
                                 onRemove = { item -> viewModel.removeDraftItem(context, item) },
+                                onUpdateQuantity = { item, newQty -> viewModel.updateDraftQuantity(context, item, newQty) },
                                 onUndo = { viewModel.undoDraftAction(context) },
                                 onClearAll = { viewModel.clearDraft(context) },
                                 onSaveTransaction = { viewModel.saveTransaction(context) },
@@ -396,7 +428,7 @@ fun MainScreen(
                                 transaksiHariIniCount = uiState.transaksiHariIniCount,
                                 favoriteItems = uiState.favoriteItems,
                                 lowStockItems = uiState.lowStockItems,
-                                onAddItemToDraft = { item -> viewModel.addToDraft(context, item) }
+                                onAddItemToDraft = { item -> selectedItemForDraftDialog = item }
                             )
                         }
 
@@ -610,4 +642,182 @@ private fun ErrorCard(errorMessage: String) {
             }
         }
     }
+}
+
+@Composable
+private fun QuantityInputDialog(
+    item: StockItem,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit
+) {
+    var quantityText by remember { mutableStateOf("1") }
+    val quantity = quantityText.toIntOrNull() ?: 0
+    val numberFormat = remember { NumberFormat.getNumberInstance(Locale("id", "ID")) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.AddShoppingCart,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Masukkan Jumlah Terjual",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Info Item Detail
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = item.namaBarang,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (item.kodeBarang.isNotBlank() && item.kodeBarang != "-") {
+                                Text(
+                                    text = "Kode: ${item.kodeBarang}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.width(1.dp))
+                            }
+                            Text(
+                                text = "Stok: ${numberFormat.format(item.stok)} ${item.satuan}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (item.stok > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+
+                // Control Angka (- 1 +)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    FilledIconButton(
+                        onClick = {
+                            val current = quantityText.toIntOrNull() ?: 1
+                            if (current > 1) {
+                                quantityText = (current - 1).toString()
+                            }
+                        },
+                        enabled = (quantityText.toIntOrNull() ?: 1) > 1,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Remove, contentDescription = "Kurang")
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    OutlinedTextField(
+                        value = quantityText,
+                        onValueChange = { newValue ->
+                            if (newValue.isEmpty() || newValue.all { it.isDigit() }) {
+                                quantityText = newValue
+                            }
+                        },
+                        label = { Text("Jumlah (Qty)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        textStyle = LocalTextStyle.current.copy(
+                            textAlign = TextAlign.Center,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp
+                        ),
+                        modifier = Modifier
+                            .width(110.dp)
+                            .testTag("input_quantity_dialog")
+                    )
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    FilledIconButton(
+                        onClick = {
+                            val current = quantityText.toIntOrNull() ?: 0
+                            quantityText = (current + 1).toString()
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Tambah")
+                    }
+                }
+
+                // Tombol Pilihan Cepat (+1, +5, +10, +50)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    listOf(1, 5, 10, 50).forEach { quickQty ->
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                val current = quantityText.toIntOrNull() ?: 0
+                                quantityText = (current + quickQty).toString()
+                            },
+                            label = { Text("+$quickQty", fontWeight = FontWeight.Bold) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val finalQty = quantityText.toIntOrNull() ?: 1
+                    if (finalQty > 0) {
+                        onConfirm(finalQty)
+                    }
+                },
+                enabled = quantity > 0,
+                modifier = Modifier.testTag("button_confirm_add_to_draft")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ShoppingCart,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Tambah ke Draft", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Batal")
+            }
+        },
+        modifier = Modifier.testTag("dialog_quantity_input")
+    )
 }

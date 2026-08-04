@@ -58,6 +58,14 @@ import com.example.data.model.DraftItem
 import java.text.NumberFormat
 import java.util.Locale
 
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
+
 @Composable
 fun DraftViewCard(
     draftItems: List<DraftItem>,
@@ -67,6 +75,7 @@ fun DraftViewCard(
     onIncrement: (DraftItem) -> Unit,
     onDecrement: (DraftItem) -> Unit,
     onRemove: (DraftItem) -> Unit,
+    onUpdateQuantity: ((DraftItem, Int) -> Unit)? = null,
     onUndo: () -> Unit,
     onClearAll: () -> Unit,
     onSaveTransaction: () -> Unit,
@@ -233,7 +242,8 @@ fun DraftViewCard(
                             numberFormat = numberFormat,
                             onIncrement = { onIncrement(draftItem) },
                             onDecrement = { onDecrement(draftItem) },
-                            onRemove = { onRemove(draftItem) }
+                            onRemove = { onRemove(draftItem) },
+                            onUpdateQuantity = { newQty -> onUpdateQuantity?.invoke(draftItem, newQty) }
                         )
                     }
 
@@ -345,7 +355,8 @@ private fun DraftItemRow(
     numberFormat: NumberFormat,
     onIncrement: () -> Unit,
     onDecrement: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onUpdateQuantity: (Int) -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -414,7 +425,7 @@ private fun DraftItemRow(
 
             Spacer(modifier = Modifier.width(10.dp))
 
-            // Right Controls: - [Jumlah] + and Delete
+            // Right Controls: - [Input OutlinedTextField] + and Delete
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -426,7 +437,7 @@ private fun DraftItemRow(
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     onClick = onDecrement,
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(34.dp)
                         .testTag("button_decrement_draft_$index")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -439,22 +450,34 @@ private fun DraftItemRow(
                     }
                 }
 
-                // Angka Jumlah
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "${draftItem.quantity}",
-                        style = MaterialTheme.typography.titleMedium,
+                // Input Jumlah Manual
+                var textQty by remember(draftItem.quantity) { mutableStateOf(draftItem.quantity.toString()) }
+
+                OutlinedTextField(
+                    value = textQty,
+                    onValueChange = { newValue ->
+                        if (newValue.isEmpty() || newValue.all { it.isDigit() }) {
+                            textQty = newValue
+                            val parsed = newValue.toIntOrNull()
+                            if (parsed != null && parsed > 0) {
+                                onUpdateQuantity(parsed)
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    textStyle = LocalTextStyle.current.copy(
+                        textAlign = TextAlign.Center,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.testTag("text_quantity_draft_$index")
-                    )
-                }
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .width(62.dp)
+                        .height(48.dp)
+                        .testTag("input_quantity_draft_$index")
+                )
 
                 // Tombol Tambah (+)
                 Surface(
@@ -462,7 +485,7 @@ private fun DraftItemRow(
                     color = MaterialTheme.colorScheme.primary,
                     onClick = onIncrement,
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(34.dp)
                         .testTag("button_increment_draft_$index")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -475,13 +498,13 @@ private fun DraftItemRow(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(2.dp))
 
                 // Tombol Hapus
                 IconButton(
                     onClick = onRemove,
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(34.dp)
                         .testTag("button_remove_draft_$index")
                 ) {
                     Icon(
