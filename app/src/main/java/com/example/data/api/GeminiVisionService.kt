@@ -17,8 +17,7 @@ import java.util.concurrent.TimeUnit
 
 object GeminiVisionService {
 
-    private const val MODEL_NAME = "gemini-3.5-flash"
-    private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent"
+    private val MODEL_CANDIDATES = listOf("gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash")
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
@@ -26,7 +25,10 @@ object GeminiVisionService {
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    suspend fun analyzeReceiptImage(bitmap: Bitmap): List<ScannedOcrItem> = withContext(Dispatchers.IO) {
+    suspend fun analyzeReceiptImage(
+        bitmap: Bitmap,
+        catalogItemNames: List<String> = emptyList()
+    ): List<ScannedOcrItem> = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
             throw IllegalStateException("API Key Gemini belum dikonfigurasi. Silakan atur GEMINI_API_KEY pada Secrets panel.")
@@ -39,16 +41,28 @@ object GeminiVisionService {
         val imageBytes = byteArrayOutputStream.toByteArray()
         val base64Image = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
 
-        // 2. Build JSON Payload
+        // 2. Build catalog prompt snippet if available
+        val catalogSnippet = if (catalogItemNames.isNotEmpty()) {
+            """
+            DAFTAR KATALOG BARANG DARI EXCEL STOCK:
+            ${catalogItemNames.take(200).joinToString("\n- ", prefix = "- ")}
+            """.trimIndent()
+        } else ""
+
+        // 3. Build Prompt
         val promptText = """
-            Anda adalah asisten OCR nota/struk penjualan yang sangat akurat.
-            Tugas Anda: Bacalah foto nota ini dan ambil daftar semua nama barang beserta jumlahnya (kuantitas / qty).
-            Aturan Penting:
-            - Jangan baca atau sertakan HARGA barang.
-            - Ekstrak hanya Nama Barang dan Jumlah/Kuantitas.
-            - Jika jumlah barang tidak tertulis dengan jelas, gunakan angka 1.
-            - Kembalikan HANYA format JSON Array murni tanpa penjelasan lain, tanpa markdown, tanpa ```json.
-            - Format JSON: [{"nama_barang": "NAMA_BARANG", "jumlah": 1}]
+            Anda adalah asisten OCR nota/struk penjualan yang sangat akurat dan presisi.
+            
+            $catalogSnippet
+
+            Tugas Anda:
+            1. Bacalah foto nota ini dan ambil daftar semua nama barang beserta jumlah kuantitasnya (qty).
+            2. COCOKKAN NAMA BARANG PADA NOTA DENGAN KATALOG BARANG EXCEL STOCK DI ATAS jika relevan (abaikan singkatan handwriting, typo kecil, atau tulisan tangan yang kurang jelas).
+            3. Jika nama barang pada nota merujuk/mirip dengan salah satu barang di KATALOG EXCEL, gunakan NAMA BARANG DARI KATALOG EXCEL.
+            4. Jika tidak ada di Katalog, gunakan nama pembacaan dari nota.
+            5. Abaikan HARGA dan TOTAL UANG.
+            6. Kembalikan HANYA format JSON Array murni:
+               [{"nama_barang": "NAMA_BARANG_DARI_EXCEL_ATAU_NOTA", "jumlah": 1}]
         """.trimIndent()
 
         val jsonRequest = JSONObject().apply {
@@ -73,35 +87,44 @@ object GeminiVisionService {
         }
 
         val requestBody = jsonRequest.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val url = "$BASE_URL?key=$apiKey"
 
-        val request = Request.Builder()
-            .url(url)
-            .post(requestBody)
-            .build()
+        var lastException: Exception? = null
 
-        val response = client.newCall(request).execute()
-        if (!response.isSuccessful) {
-            val errBody = response.body?.string() ?: ""
-            throw IllegalStateException("Gagal menghubungi Gemini API (${response.code}): $errBody")
+        // Try model candidates with fallback
+        for (modelName in MODEL_CANDIDATES) {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .post(requestBody)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    val errBody = response.body?.string() ?: ""
+                    lastException = IllegalStateException("Gagal menghubungi Gemini API ($modelName - ${response.code}): $errBody")
+                    continue
+                }
+
+                val responseString = response.body?.string() ?: continue
+                val jsonResponse = JSONObject(responseString)
+
+                val candidates = jsonResponse.optJSONArray("candidates") ?: continue
+                val firstCandidate = candidates.optJSONObject(0) ?: continue
+                val content = firstCandidate.optJSONObject("content") ?: continue
+                val parts = content.optJSONArray("parts") ?: continue
+                val rawText = parts.optJSONObject(0)?.optString("text") ?: continue
+
+                val items = parseOcrJsonText(rawText)
+                if (items.isNotEmpty()) {
+                    return@withContext items
+                }
+            } catch (e: Exception) {
+                lastException = e
+            }
         }
 
-        val responseString = response.body?.string() ?: throw IllegalStateException("Respons kosong dari Gemini API")
-        val jsonResponse = JSONObject(responseString)
-
-        val candidates = jsonResponse.optJSONArray("candidates")
-            ?: throw IllegalStateException("Gemini API tidak mengembalikan kandidat respons.")
-
-        val firstCandidate = candidates.optJSONObject(0)
-            ?: throw IllegalStateException("Hasil respons Gemini kosong.")
-
-        val content = firstCandidate.optJSONObject("content")
-        val parts = content?.optJSONArray("parts")
-        val rawText = parts?.optJSONObject(0)?.optString("text")
-            ?: throw IllegalStateException("Teks hasil pembacaan nota tidak ditemukan.")
-
-        // Parse extracted JSON string
-        parseOcrJsonText(rawText)
+        throw lastException ?: IllegalStateException("Gagal memproses foto nota dengan Gemini AI. Pastikan foto terlihat jelas dan koneksi internet stabil.")
     }
 
     private fun parseOcrJsonText(rawText: String): List<ScannedOcrItem> {

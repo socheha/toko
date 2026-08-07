@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
@@ -54,6 +55,7 @@ import java.util.Locale
 fun TransactionHistoryCard(
     transactions: List<TransactionRecord>,
     onUndoLastTransaction: () -> Unit,
+    onClearAllHistory: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val numberFormat = NumberFormat.getNumberInstance(Locale.GERMANY)
@@ -132,29 +134,49 @@ fun TransactionHistoryCard(
                     }
                 }
 
-                // Tombol Undo Transaksi Terakhir
-                OutlinedButton(
-                    onClick = onUndoLastTransaction,
-                    enabled = transactions.isNotEmpty(),
-                    modifier = Modifier
-                        .height(36.dp)
-                        .testTag("button_undo_last_transaction"),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    ),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Undo,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Undo Transaksi",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold
-                    )
+                    if (onClearAllHistory != null && transactions.isNotEmpty()) {
+                        IconButton(
+                            onClick = onClearAllHistory,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("button_reset_history_transaksi")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Reset Riwayat Transaksi",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
+                    // Tombol Undo Transaksi Terakhir
+                    OutlinedButton(
+                        onClick = onUndoLastTransaction,
+                        enabled = transactions.isNotEmpty(),
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("button_undo_last_transaction"),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        ),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Undo,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Undo",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 

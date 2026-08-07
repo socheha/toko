@@ -206,14 +206,14 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             val (fileName, fileSizeStr) = getFileInfo(context, uri)
-            val result = repository.processExcelImport(context, uri, fileName, fileSizeStr)
+            val (result, persistentUri) = repository.processExcelImport(context, uri, fileName, fileSizeStr)
 
             _uiState.update {
                 it.copy(
                     isLoading = false,
                     analysisResult = result,
                     selectedSheetName = result.activeSheetName,
-                    currentUri = uri,
+                    currentUri = persistentUri,
                     errorMessage = result.errorMessage
                 )
             }
@@ -336,6 +336,68 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         viewModelScope.launch {
             repository.clearCurrentData()
             _uiState.update { StockUiState() }
+        }
+    }
+
+    fun resetExcelData(context: Context) {
+        viewModelScope.launch {
+            repository.resetExcelData(context)
+            _uiState.update {
+                it.copy(
+                    analysisResult = null,
+                    selectedSheetName = "",
+                    currentUri = null,
+                    searchQuery = "",
+                    draftItems = emptyList(),
+                    draftHistory = emptyList(),
+                    snackbarMessage = "Data Excel & Stok Barang berhasil di-reset."
+                )
+            }
+        }
+    }
+
+    fun clearTransactionHistory() {
+        viewModelScope.launch {
+            repository.clearTransactionHistory()
+            _uiState.update {
+                it.copy(
+                    snackbarMessage = "Riwayat transaksi penjualan berhasil di-reset."
+                )
+            }
+        }
+    }
+
+    fun clearScanHistory() {
+        viewModelScope.launch {
+            repository.clearScanHistory()
+            _uiState.update {
+                it.copy(
+                    snackbarMessage = "Riwayat scan nota OCR berhasil di-reset."
+                )
+            }
+        }
+    }
+
+    fun resetAllData(context: Context) {
+        viewModelScope.launch {
+            repository.resetAllData(context)
+            _uiState.update {
+                it.copy(
+                    analysisResult = null,
+                    selectedSheetName = "",
+                    currentUri = null,
+                    searchQuery = "",
+                    draftItems = emptyList(),
+                    draftHistory = emptyList(),
+                    totalUangHariIniInput = "",
+                    insufficientStockProblemItems = null,
+                    exportResult = null,
+                    scanMatchResults = null,
+                    activeScanRecord = null,
+                    showScanHistoryDialog = false,
+                    snackbarMessage = "Semua data (Excel, Stok, Transaksi & Scan) berhasil di-reset total!"
+                )
+            }
         }
     }
 
@@ -592,12 +654,25 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
                     }
                 }
                 is TransactionResult.Success -> {
+                    val currentAnalysis = _uiState.value.analysisResult
+                    val updatedAnalysis = currentAnalysis?.let { analysis ->
+                        val currentSheet = _uiState.value.selectedSheetName
+                        val itemsInSheet = displayedItems.value
+                        val newStockSum = itemsInSheet.sumOf { it.stok }
+                        analysis.copy(
+                            totalStockSum = newStockSum,
+                            totalItems = itemsInSheet.size,
+                            items = itemsInSheet
+                        )
+                    }
+
                     _uiState.update {
                         it.copy(
                             isSavingTransaction = false,
                             draftItems = emptyList(),
                             draftHistory = emptyList(),
                             totalUangHariIniInput = "",
+                            analysisResult = updatedAnalysis ?: it.analysisResult,
                             snackbarMessage = "Transaksi tanggal ${result.transaction.tanggalFormatted} ${result.transaction.jamFormatted} berhasil disimpan! Stok telah berkurang."
                         )
                     }
@@ -620,9 +695,21 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
                     }
                 }
                 is UndoResult.Success -> {
+                    val currentAnalysis = _uiState.value.analysisResult
+                    val updatedAnalysis = currentAnalysis?.let { analysis ->
+                        val itemsInSheet = displayedItems.value
+                        val newStockSum = itemsInSheet.sumOf { it.stok }
+                        analysis.copy(
+                            totalStockSum = newStockSum,
+                            totalItems = itemsInSheet.size,
+                            items = itemsInSheet
+                        )
+                    }
+
                     _uiState.update {
                         it.copy(
                             isLoading = false,
+                            analysisResult = updatedAnalysis ?: it.analysisResult,
                             snackbarMessage = "Transaksi ${result.undoneTransaction.tanggalFormatted} ${result.undoneTransaction.jamFormatted} berhasil dibatalkan dan stok telah dikembalikan."
                         )
                     }

@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddShoppingCart
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Remove
@@ -98,6 +99,7 @@ import com.example.ui.components.ExportExcelCard
 import com.example.ui.components.FileImportHeader
 import com.example.ui.components.InsufficientStockDialog
 import com.example.ui.components.KeyboardShortcutsBanner
+import com.example.ui.components.ResetDataDialog
 import com.example.ui.components.ScanHistoryDialog
 import com.example.ui.components.ScanReceiptCard
 import com.example.ui.components.ScanResultsDialog
@@ -120,6 +122,7 @@ fun MainScreen(
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var selectedItemForDraftDialog by remember { mutableStateOf<StockItem?>(null) }
+    var showResetDialog by remember { mutableStateOf(false) }
 
     // Dialog Input Jumlah Terjual saat klik nama barang
     selectedItemForDraftDialog?.let { item ->
@@ -216,6 +219,17 @@ fun MainScreen(
             )
         }
 
+        // Reset Data Options Dialog
+        if (showResetDialog) {
+            ResetDataDialog(
+                onResetExcel = { viewModel.resetExcelData(context) },
+                onResetTransactionHistory = { viewModel.clearTransactionHistory() },
+                onResetScanHistory = { viewModel.clearScanHistory() },
+                onResetAll = { viewModel.resetAllData(context) },
+                onDismiss = { showResetDialog = false }
+            )
+        }
+
         Scaffold(
             modifier = keyboardModifier,
             topBar = {
@@ -260,17 +274,16 @@ fun MainScreen(
                             )
                         }
 
-                        if (uiState.analysisResult != null) {
-                            IconButton(
-                                onClick = { viewModel.clearData() },
-                                modifier = Modifier.testTag("action_reset_data")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Reset Data",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                        // Reset Data Action Button
+                        IconButton(
+                            onClick = { showResetDialog = true },
+                            modifier = Modifier.testTag("action_reset_data")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteSweep,
+                                contentDescription = "Reset Fitur & Data",
+                                tint = MaterialTheme.colorScheme.error
+                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -447,7 +460,8 @@ fun MainScreen(
                         item {
                             TransactionHistoryCard(
                                 transactions = uiState.transactions,
-                                onUndoLastTransaction = { viewModel.undoLastTransaction(context) }
+                                onUndoLastTransaction = { viewModel.undoLastTransaction(context) },
+                                onClearAllHistory = { viewModel.clearTransactionHistory() }
                             )
                         }
                     }
@@ -459,7 +473,7 @@ fun MainScreen(
                                 analysisResult = uiState.analysisResult,
                                 onFileSelected = { uri -> viewModel.importFile(context, uri) },
                                 onLoadSample = { viewModel.loadSampleData(context) },
-                                onClearData = { viewModel.clearData() }
+                                onClearData = { showResetDialog = true }
                             )
                         }
 

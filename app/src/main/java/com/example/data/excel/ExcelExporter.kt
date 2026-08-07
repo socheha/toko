@@ -133,6 +133,47 @@ object ExcelExporter {
         }
     }
 
+    /**
+     * Memperbarui file workbook Excel aktif di disk internal secara langsung (in-place)
+     * sehingga saat sheet diganti atau file dibaca ulang, stok yang telah berkurang tetap tersimpan di file Excel.
+     */
+    fun updateActiveWorkbookInPlace(
+        context: Context,
+        targetFile: File,
+        updatedStockItems: List<StockItem>
+    ) {
+        if (!targetFile.exists()) return
+
+        try {
+            System.setProperty("java.io.tmpdir", context.cacheDir.absolutePath)
+        } catch (ignored: Throwable) {}
+
+        try {
+            val workbook = WorkbookFactory.create(targetFile)
+
+            for (item in updatedStockItems) {
+                val sheetName = item.lokasiSheet
+                val sheet = workbook.getSheet(sheetName) ?: continue
+
+                val rowIndex = item.nomorBaris - 1
+                if (rowIndex < 0) continue
+
+                val row = sheet.getRow(rowIndex) ?: sheet.createRow(rowIndex)
+                val colIndex = extractColumnIndex(item.kolomStok)
+                val cell = row.getCell(colIndex) ?: row.createCell(colIndex)
+
+                cell.setCellValue(item.stok)
+            }
+
+            FileOutputStream(targetFile).use { fos ->
+                workbook.write(fos)
+            }
+            workbook.close()
+        } catch (e: Throwable) {
+            e.printStackTrace()
+        }
+    }
+
     private fun extractColumnIndex(kolomStokStr: String): Int {
         val regexMatch = Regex("""Kolom\s+([A-Z]+)""", RegexOption.IGNORE_CASE).find(kolomStokStr)
         if (regexMatch != null) {

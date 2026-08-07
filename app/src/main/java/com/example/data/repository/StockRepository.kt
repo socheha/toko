@@ -81,6 +81,13 @@ class StockRepository(private val stockDao: StockDao) {
             }
         }
 
+        // 4. Perbarui file Excel aktif di disk secara langsung (in-place)
+        val activeFile = java.io.File(context.filesDir, "active_workbook.xlsx")
+        val updatedDbItems = stockDao.getAllItemsList()
+        if (activeFile.exists()) {
+            com.example.data.excel.ExcelExporter.updateActiveWorkbookInPlace(context, activeFile, updatedDbItems)
+        }
+
         val now = System.currentTimeMillis()
         val dateFormat = SimpleDateFormat("dd MMM yyyy", Locale("id", "ID"))
         val timeFormat = SimpleDateFormat("HH:mm:ss", Locale("id", "ID"))
@@ -121,6 +128,13 @@ class StockRepository(private val stockDao: StockDao) {
             }
         }
 
+        // Perbarui file Excel aktif di disk secara langsung (in-place)
+        val activeFile = java.io.File(context.filesDir, "active_workbook.xlsx")
+        val updatedDbItems = stockDao.getAllItemsList()
+        if (activeFile.exists()) {
+            com.example.data.excel.ExcelExporter.updateActiveWorkbookInPlace(context, activeFile, updatedDbItems)
+        }
+
         // Hapus transaksi terakhir dari DB
         stockDao.deleteTransaction(lastTx.id)
 
@@ -132,17 +146,31 @@ class StockRepository(private val stockDao: StockDao) {
         uri: Uri,
         fileName: String,
         fileSizeFormatted: String
-    ): WorkbookAnalysisResult = withContext(Dispatchers.IO) {
+    ): Pair<WorkbookAnalysisResult, Uri> = withContext(Dispatchers.IO) {
         try {
-            val result = ExcelParser.parseExcelWorkbook(context, uri, fileName, fileSizeFormatted)
+            // Salin file yang diimpor ke file internal lokal aktif agar Uri tidak kadaluarsa/hilang
+            val activeFile = java.io.File(context.filesDir, "active_workbook.xlsx")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                java.io.FileOutputStream(activeFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            val persistentUri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                activeFile
+            )
+
+            val result = ExcelParser.parseExcelWorkbook(context, persistentUri, fileName, fileSizeFormatted)
             if (result.items.isNotEmpty()) {
                 stockDao.clearAll()
                 stockDao.insertAll(result.items)
             }
-            result
+            Pair(result, persistentUri)
         } catch (e: Throwable) {
             e.printStackTrace()
-            WorkbookAnalysisResult(
+            val errResult = WorkbookAnalysisResult(
                 fileName = fileName,
                 fileSizeFormatted = fileSizeFormatted,
                 totalSheets = 0,
@@ -153,6 +181,7 @@ class StockRepository(private val stockDao: StockDao) {
                 items = emptyList(),
                 errorMessage = "Gagal memproses file Excel: ${e.localizedMessage ?: e.javaClass.simpleName}"
             )
+            Pair(errResult, uri)
         }
     }
 
@@ -172,8 +201,8 @@ class StockRepository(private val stockDao: StockDao) {
 
     suspend fun generateAndImportSample(context: Context): Pair<WorkbookAnalysisResult, Uri> = withContext(Dispatchers.IO) {
         val (sampleUri, fileName) = SampleExcelGenerator.createSampleStockExcel(context)
-        val result = processExcelImport(context, sampleUri, fileName, "~15 KB")
-        Pair(result, sampleUri)
+        val (result, persistentUri) = processExcelImport(context, sampleUri, fileName, "~15 KB")
+        Pair(result, persistentUri)
     }
 
     suspend fun exportExcelData(
@@ -194,23 +223,53 @@ class StockRepository(private val stockDao: StockDao) {
         stockDao.clearAll()
     }
 
+    suspend fun resetExcelData(context: Context) = withContext(Dispatchers.IO) {
+        stockDao.clearAll()
+        val activeFile = java.io.File(context.filesDir, "active_workbook.xlsx")
+        if (activeFile.exists()) {
+            activeFile.delete()
+        }
+    }
+
+    suspend fun clearTransactionHistory() = withContext(Dispatchers.IO) {
+        stockDao.clearTransactions()
+    }
+
+    suspend fun clearScanHistory() = withContext(Dispatchers.IO) {
+        stockDao.clearScanRecords()
+    }
+
+    suspend fun resetAllData(context: Context) = withContext(Dispatchers.IO) {
+        stockDao.clearAll()
+        stockDao.clearTransactions()
+        stockDao.clearScanRecords()
+        DraftPersistenceManager.clearDraft(context)
+        val activeFile = java.io.File(context.filesDir, "active_workbook.xlsx")
+        if (activeFile.exists()) {
+            activeFile.delete()
+        }
+    }
+
     // --- TAHAP 6: SCAN NOTA AI ---
 
     suspend fun processReceiptScan(
         context: Context,
         bitmap: android.graphics.Bitmap
     ): Pair<List<com.example.data.model.ScanMatchResultItem>, com.example.data.model.ScanRecord> = withContext(Dispatchers.IO) {
-        // 1. Panggil Gemini Vision API untuk membaca isi nota
-        val scannedOcrItems = com.example.data.api.GeminiVisionService.analyzeReceiptImage(bitmap)
+        // 1. Ambil seluruh data barang dari database Excel
+        val allDbItems = stockDao.getAllItemsList()
+
+        // 2. Panggil Gemini Vision API dengan katalog nama barang Excel untuk pencocokan optimal
+        val scannedOcrItems = com.example.data.api.GeminiVisionService.analyzeReceiptImage(
+            bitmap = bitmap,
+            catalogItemNames = allDbItems.map { it.namaBarang }
+        )
 
         if (scannedOcrItems.isEmpty()) {
             throw IllegalStateException("AI tidak dapat menemukan nama/jumlah barang dari foto nota. Pastikan foto nota terlihat jelas.")
         }
 
-        // 2. Ambil seluruh data barang dari database Excel
-        val allDbItems = stockDao.getAllItemsList()
-
-        // 3. Lakukan Pencocokan Barang (Fuzzy Matching)
+        // 3. Lakukan Pencocokan Barang lanjutan (Fuzzy Matching)
         val matchResults = scannedOcrItems.map { scannedItem ->
             val candidates = com.example.ui.util.FuzzySearchEngine.search(
                 items = allDbItems,
@@ -224,7 +283,7 @@ class StockRepository(private val stockDao: StockDao) {
                 quantity = scannedItem.jumlah,
                 selectedStockItem = topCandidate,
                 candidateStockItems = candidates,
-                isUserConfirmed = true
+                isUserConfirmed = topCandidate != null
             )
         }
 

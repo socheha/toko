@@ -68,6 +68,9 @@ interface StockDao {
     @Query("DELETE FROM transaction_records WHERE id = :id")
     suspend fun deleteTransaction(id: Long)
 
+    @Query("DELETE FROM transaction_records")
+    suspend fun clearTransactions()
+
     // --- SCAN NOTA HISTORY DAOS (TAHAP 6) ---
     @Query("SELECT * FROM scan_records ORDER BY timestamp DESC")
     fun getAllScanRecords(): Flow<List<com.example.data.model.ScanRecord>>
